@@ -4,6 +4,9 @@
 #include <string.h>
 #include "libotikiosk.h"
 
+// ADACOL:
+#include <libwebsockets.h>
+
 const char* ok_status_to_text(KIOSK_STATUS s) {
   switch(s) {
   case OK_ERROR:
@@ -86,6 +89,59 @@ void Reader_Event_Callback(uint8_t msg_index, char* s_line1, char* s_line2) {
   printf("    Reader message 0x%.2X: '%s', '%s'\n", msg_index, s_line1, s_line2);
 }
 
+
+// ADACOL: libwebsocket ////////////////////////////////////////////////////////
+static int interrupted = 0;
+
+/* Signal handler to stop the loop */
+void sigint_handler(int sig) {
+    interrupted = 1;
+}
+
+/* WebSocket callback */
+static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
+                              void *user, void *in, size_t len) {
+
+	char buff[len];
+	memset(buff,0,len);
+
+    switch (reason) {
+        case LWS_CALLBACK_ESTABLISHED:
+            printf("Client connected!\n");
+            break;
+        case LWS_CALLBACK_RECEIVE:
+        	memset(buff,0,len);
+        	memcpy(buff, in, len);
+
+//        	printf("sizeof buff : %d\n", (int)sizeof(buff));
+//        	for(uint8_t ind=0; ind<len; ind++)
+//        	{
+//            	printf("buff[i]: %c\n", buff[ind]);
+//        	}
+
+//        	printf("sizeof buff : %d\n", (int)sizeof(buff));
+        	printf("Received len: %d\n", (int)len);
+        	if(memcmp(buff, "Hello, WebSocket!", sizeof(buff)) == 0) {
+        		printf("Received buff: %s\n", (char *)buff);
+        	}
+
+            lws_write(wsi, in, len, LWS_WRITE_TEXT);  // Echo back the message
+            break;
+        case LWS_CALLBACK_CLOSED:
+            printf("Client disconnected!\n");
+            break;
+        default:
+            break;
+    }
+    return 0;
+}
+/* WebSocket protocol list */
+static const struct lws_protocols protocols[] = {
+    {"example-protocol", callback_websocket, 0, 4096},
+    {NULL, NULL, 0, 0}
+};
+
+
 int main(void) {
   otiKioskPaymentParameters pmt_params;
   uint32_t time_state_expiration = 0;
@@ -100,6 +156,31 @@ int main(void) {
   pmt_params.timeout_sec = 10;
   pmt_params.continuous = false;
   pmt_params.product_id = 0;
+
+  printf("ADACOL: Kiosk Yocto program \n");
+
+  // ADACOL: libwebsocket //////////////////////////////////////////////////////
+  signal(SIGINT, sigint_handler);
+
+  struct lws_context_creation_info info = {0};
+  info.port = 9000;  // WebSocket server will listen on this port
+  info.protocols = protocols;
+
+  struct lws_context *context = lws_create_context(&info);
+  if (!context) {
+      printf("Failed to create WebSocket server!\n");
+      return -1;
+  }
+
+  printf("WebSocket server started on port 9000...\n");
+
+  while (!interrupted) {
+      lws_service(context, 1000);  // Process WebSocket events
+  }
+
+  lws_context_destroy(context);
+  printf("Server stopped.\n");
+  // ADACOL: libwebsocket end ///////////////////////////////////////////////////
 
   LibOtiKiosk_Enable_Debug_Logs(true);
 

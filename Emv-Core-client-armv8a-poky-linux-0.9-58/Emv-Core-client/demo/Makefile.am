@@ -9,11 +9,11 @@ DISTCLEANFILES = *.in
 bin_PROGRAMS = otiKioskDemo
 otiKioskDemo_SOURCES = otiKioskDemo.c
 otiKioskDemo_CFLAGS = -g -O0 -pthread -I../libotikiosk
-otiKioskDemo_LDFLAGS = -pthread
+otiKioskDemo_LDFLAGS = -pthread -lwebsockets
 
 AM_CFLAGS = @otiKioskDemo_CFLAGS@
 AM_LDFLAGS =  @otiKioskDemo_LDFLAGS@
 
-otiKioskDemo_LDADD = ../libotikiosk/libotikiosk.a -lstdc++
+otiKioskDemo_LDADD = ../libotikiosk/libotikiosk.a -lstdc++ -lwebsockets
 
 CLEANFILES = *~ *.o

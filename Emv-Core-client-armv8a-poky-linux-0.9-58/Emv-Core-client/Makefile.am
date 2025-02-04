@@ -5,3 +5,5 @@ MAINTAINERCLEANFILES = aclocal.m4 compile config.guess \
 		ltmain.sh Makefile.in missing *~ m4/*
 
 DISTCLEANFILES = *.in
+
+LDFLAGS += -lwebsockets
