@@ -1,11 +1,14 @@
 #include <unistd.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 #include <string.h>
 #include "libotikiosk.h"
 
 // ADACOL:
 #include <libwebsockets.h>
+
+#include "cJSON.h"
 
 const char* ok_status_to_text(KIOSK_STATUS s) {
   switch(s) {
@@ -92,6 +95,11 @@ void Reader_Event_Callback(uint8_t msg_index, char* s_line1, char* s_line2) {
 
 // ADACOL: libwebsocket ////////////////////////////////////////////////////////
 static int interrupted = 0;
+static int _payment_status = 0;
+
+static struct lws *_wsi = NULL;  // Store the WebSocket instance
+static int _send_message_flag = 0;  // Flag to indicate a message should be sent
+char _json_message[256];
 
 /* Signal handler to stop the loop */
 void sigint_handler(int sig) {
@@ -102,16 +110,21 @@ void sigint_handler(int sig) {
 static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
                               void *user, void *in, size_t len) {
 
-	char buff[len];
-	memset(buff,0,len);
+//	char buff[len];
+//	memset(buff,0,len);
 
     switch (reason) {
         case LWS_CALLBACK_ESTABLISHED:
             printf("Client connected!\n");
+            _wsi = wsi;  // Store the WebSocket instance
+            _payment_status = 1;
             break;
         case LWS_CALLBACK_RECEIVE:
-        	memset(buff,0,len);
-        	memcpy(buff, in, len);
+
+        	// ADACOL:
+
+//        	memset(buff,0,len);
+//        	memcpy(buff, in, len);
 
 //        	printf("sizeof buff : %d\n", (int)sizeof(buff));
 //        	for(uint8_t ind=0; ind<len; ind++)
@@ -120,21 +133,74 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
 //        	}
 
 //        	printf("sizeof buff : %d\n", (int)sizeof(buff));
-        	printf("Received len: %d\n", (int)len);
-        	if(memcmp(buff, "Hello, WebSocket!", sizeof(buff)) == 0) {
-        		printf("Received buff: %s\n", (char *)buff);
-        	}
+//        	printf("Received len: %d\n", (int)len);
+//        	if(memcmp(buff, "Hello, WebSocket!", sizeof(buff)) == 0) {
+//        		printf("Received buff: %s\n", (char *)buff);
+//        	}
 
-            lws_write(wsi, in, len, LWS_WRITE_TEXT);  // Echo back the message
+//            lws_write(wsi, in, len, LWS_WRITE_TEXT);  // Echo back the message
             break;
+        case LWS_CALLBACK_SERVER_WRITEABLE:
+        	if (_send_message_flag) {
+                  // Prepare message buffer (libwebsockets requires LWS_SEND_BUFFER_PRE_PADDING)
+                  unsigned char buf[LWS_PRE + 256];
+                  unsigned char *p = &buf[LWS_PRE];
+                  size_t json_len = strlen(_json_message);
+                  memcpy(p, _json_message, json_len);
+
+                  // Send the message
+                  lws_write(wsi, p, json_len, LWS_WRITE_TEXT);
+
+                  _send_message_flag = 0;  // Reset flag
+        	}
+        	break;
+
         case LWS_CALLBACK_CLOSED:
             printf("Client disconnected!\n");
+            _payment_status = 0;
+            _wsi = NULL;
             break;
         default:
             break;
     }
     return 0;
 }
+// Function to send a JSON message
+void send_json_message(const char* content) {
+    if (_wsi) {
+
+		_send_message_flag = 1;  // Set flag to trigger sending in LWS_CALLBACK_SERVER_WRITEABLE
+
+		// Create JSON object
+		cJSON *root = cJSON_CreateObject();
+		cJSON_AddStringToObject(root, "type", "transaction");
+		cJSON_AddStringToObject(root, "content", content);
+
+		// Convert JSON to string
+		char *json_str = cJSON_PrintUnformatted(root);
+		snprintf(_json_message, sizeof(_json_message), "%s", json_str);
+		cJSON_free(json_str);  // Free memory
+		cJSON_Delete(root);  // Delete JSON object
+
+		lws_callback_on_writable(_wsi);  // Notify libwebsockets to send data
+    }
+}
+
+static void test_cjson() {
+    // Create a JSON object
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "type", "message");
+    cJSON_AddStringToObject(root, "content", "Hello, WebSocket!");
+
+    // Convert JSON object to a string
+    char *json_str = cJSON_Print(root);
+    printf("Generated JSON:\n%s\n", json_str);
+
+    // Clean up
+    free(json_str);
+    cJSON_Delete(root);
+}
+
 /* WebSocket protocol list */
 static const struct lws_protocols protocols[] = {
     {"example-protocol", callback_websocket, 0, 4096},
@@ -157,7 +223,9 @@ int main(void) {
   pmt_params.continuous = false;
   pmt_params.product_id = 0;
 
-  printf("ADACOL: Kiosk Yocto program \n");
+  printf("ADACOL: Kiosk IMX  program \n");
+
+//  test_cjson();
 
   // ADACOL: libwebsocket //////////////////////////////////////////////////////
   signal(SIGINT, sigint_handler);
@@ -171,18 +239,10 @@ int main(void) {
       printf("Failed to create WebSocket server!\n");
       return -1;
   }
-
   printf("WebSocket server started on port 9000...\n");
-
-  while (!interrupted) {
-      lws_service(context, 1000);  // Process WebSocket events
-  }
-
-  lws_context_destroy(context);
-  printf("Server stopped.\n");
   // ADACOL: libwebsocket end ///////////////////////////////////////////////////
 
-  LibOtiKiosk_Enable_Debug_Logs(true);
+  //LibOtiKiosk_Enable_Debug_Logs(true);
 
   /* Uses internal (Unix Domain) sockets, this is the default behavior for Kiosk Core.
    * Will work only if both applications are started from the same folder, or
@@ -248,9 +308,12 @@ int main(void) {
         break;
       case ST_TRANS_COMPLETE:
         printf("transaction complete with status: %s\n", trans_status_to_text(last_payment_response.status));
+        _payment_status = 0;
+        send_json_message(trans_status_to_text(last_payment_response.status));
         if(last_payment_response.status == otiTransactionStatus_OK || last_payment_response.status == otiTransactionStatus_LocalMifare) {
           // TODO: print some details
           LibOtiKiosk_ShowMessage("approved", "thank you!");
+
           static bool confirm = true;
           if(confirm) {
             // confirm with product ID 42
@@ -262,6 +325,7 @@ int main(void) {
           confirm = !confirm;
         } else {
           LibOtiKiosk_ShowMessage(trans_status_to_text(last_payment_response.status), "");
+//          _payment_status = 0;
         }
         new_state = ST_MESSAGE;
         break;
@@ -272,19 +336,36 @@ int main(void) {
       }
     }
 
+    if (!interrupted) {
+        lws_service(context, 1000);  // Process WebSocket events
+    }
+
+    if (_payment_status == 1)  {
+    	if (cur_state == ST_IDLE) {
+    		new_state = ST_TRANS; // start a transaction
+    		printf("new_state = ST_TRANS");
+    	}
+
+    }
+
     // check for expiration
     if(time_state_expiration > 0 && get_time_sec() > time_state_expiration) {
       switch(cur_state) {
-        case ST_IDLE:
-          if(last_status == OK_READY)
-            new_state = ST_TRANS; // start a transaction
-          break;
+//        case ST_IDLE:
+//          if(last_status == OK_READY)
+//            new_state = ST_TRANS; // start a transaction
+//          break;
         case ST_MESSAGE:
           new_state = ST_IDLE; // go back to idle state
+//          break;
       }
     }
 
     sleep(1);
   }
+
+  lws_context_destroy(context);
+  printf("Server stopped.\n");
+
   return 0;
 }

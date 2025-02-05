@@ -7,7 +7,7 @@ MAINTAINERCLEANFILES = aclocal.m4 compile config.guess \
 DISTCLEANFILES = *.in
 
 bin_PROGRAMS = otiKioskDemo
-otiKioskDemo_SOURCES = otiKioskDemo.c
+otiKioskDemo_SOURCES = otiKioskDemo.c cJSON.c
 otiKioskDemo_CFLAGS = -g -O0 -pthread -I../libotikiosk
 otiKioskDemo_LDFLAGS = -pthread -lwebsockets
 
